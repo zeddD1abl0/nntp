@@ -1,8 +1,4 @@
-// Copyright 2009 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
-// The nntp package implements a client for the news protocol NNTP,
+// Package nntp implements a client for the news protocol NNTP,
 // as defined in RFC 3977.
 package nntp
 
@@ -170,6 +166,7 @@ func (a *Article) String() string {
 	return fmt.Sprintf("[NNTP article %s]", id[0])
 }
 
+// WriteTo wites the article contents to the given writer.
 func (a *Article) WriteTo(w io.Writer) (int64, error) {
 	return io.Copy(w, &articleReader{a: a})
 }
@@ -182,7 +179,7 @@ func (e Error) Error() string {
 	return fmt.Sprintf("%03d %s", e.Code, e.Msg)
 }
 
-func maybeId(cmd, id string) string {
+func maybeID(cmd, id string) string {
 	if len(id) > 0 {
 		return cmd + " " + id
 	}
@@ -217,7 +214,7 @@ func Dial(network, addr string) (*Conn, error) {
 	return newConn(c)
 }
 
-// Same as Dial but handles TLS connections
+// DialTLS is the same as Dial but handles TLS connections
 func DialTLS(network, addr string, config *tls.Config) (*Conn, error) {
 	// dial
 	c, err := tls.Dial(network, addr, config)
@@ -354,13 +351,13 @@ func (c *Conn) NewNews(group string, since time.Time) ([]string, error) {
 	return id, nil
 }
 
-// Overview of a message returned by OVER command.
+// MessageOverview of a message returned by OVER/XOVER command.
 type MessageOverview struct {
 	MessageNumber int       // Message number in the group
 	Subject       string    // Subject header value. Empty if the header is missing.
 	From          string    // From header value. Empty is the header is missing.
 	Date          time.Time // Parsed Date header value. Zero if the header is missing or unparseable.
-	MessageId     string    // Message-Id header value. Empty is the header is missing.
+	MessageID     string    // Message-Id header value. Empty is the header is missing.
 	References    []string  // Message-Id's of referenced messages (References header value, split on spaces). Empty if the header is missing.
 	Bytes         int       // Message size in bytes, called :bytes metadata item in RFC3977.
 	Lines         int       // Message size in lines, called :lines metadata item in RFC3977.
@@ -397,7 +394,7 @@ func (c *Conn) Overview(begin, end int) ([]MessageOverview, error) {
 			// Inability to parse date is not fatal: the field in the message may be broken or missing.
 			overview.Date = time.Time{}
 		}
-		overview.MessageId = ss[4]
+		overview.MessageID = ss[4]
 		overview.References = strings.Split(ss[5], " ") // Message-Id's contain no spaces, so this is safe.
 		overview.Bytes, err = strconv.Atoi(ss[6])
 		if err != nil {
@@ -415,7 +412,7 @@ func (c *Conn) Overview(begin, end int) ([]MessageOverview, error) {
 
 // parseGroups is used to parse a list of group states.
 func parseGroups(lines []string) ([]*Group, error) {
-	res := make([]*Group, 0)
+	var res []*Group
 	for _, line := range lines {
 		ss := strings.SplitN(strings.TrimSpace(line), " ", 4)
 		if len(ss) < 4 {
@@ -495,7 +492,7 @@ func (c *Conn) Group(group string) (number, low, high int, err error) {
 	}
 
 	var n [3]int
-	for i, _ := range n {
+	for i := range n {
 		c, e := strconv.Atoi(ss[i])
 		if e != nil {
 			err = ProtocolError("bad group response: " + line)
@@ -517,7 +514,7 @@ func (c *Conn) Help() (io.Reader, error) {
 
 // nextLastStat performs the work for NEXT, LAST, and STAT.
 func (c *Conn) nextLastStat(cmd, id string) (string, string, error) {
-	_, line, err := c.cmd(223, maybeId(cmd, id))
+	_, line, err := c.cmd(223, maybeID(cmd, id))
 	if err != nil {
 		return "", "", err
 	}
@@ -549,7 +546,7 @@ func (c *Conn) Next() (number, msgid string, err error) {
 // ArticleText returns the article named by id as an io.Reader.
 // The article is in plain text format, not NNTP wire format.
 func (c *Conn) ArticleText(id string) (io.Reader, error) {
-	if _, _, err := c.cmd(220, maybeId("ARTICLE", id)); err != nil {
+	if _, _, err := c.cmd(220, maybeID("ARTICLE", id)); err != nil {
 		return nil, err
 	}
 	return c.body(), nil
@@ -557,7 +554,7 @@ func (c *Conn) ArticleText(id string) (io.Reader, error) {
 
 // Article returns the article named by id as an *Article.
 func (c *Conn) Article(id string) (*Article, error) {
-	if _, _, err := c.cmd(220, maybeId("ARTICLE", id)); err != nil {
+	if _, _, err := c.cmd(220, maybeID("ARTICLE", id)); err != nil {
 		return nil, err
 	}
 	r := bufio.NewReader(c.body())
@@ -572,7 +569,7 @@ func (c *Conn) Article(id string) (*Article, error) {
 // HeadText returns the header for the article named by id as an io.Reader.
 // The article is in plain text format, not NNTP wire format.
 func (c *Conn) HeadText(id string) (io.Reader, error) {
-	if _, _, err := c.cmd(221, maybeId("HEAD", id)); err != nil {
+	if _, _, err := c.cmd(221, maybeID("HEAD", id)); err != nil {
 		return nil, err
 	}
 	return c.body(), nil
@@ -581,7 +578,7 @@ func (c *Conn) HeadText(id string) (io.Reader, error) {
 // Head returns the header for the article named by id as an *Article.
 // The Body field in the Article is nil.
 func (c *Conn) Head(id string) (*Article, error) {
-	if _, _, err := c.cmd(221, maybeId("HEAD", id)); err != nil {
+	if _, _, err := c.cmd(221, maybeID("HEAD", id)); err != nil {
 		return nil, err
 	}
 	return c.readHeader(bufio.NewReader(c.body()))
@@ -589,7 +586,7 @@ func (c *Conn) Head(id string) (*Article, error) {
 
 // Body returns the body for the article named by id as an io.Reader.
 func (c *Conn) Body(id string) (io.Reader, error) {
-	if _, _, err := c.cmd(222, maybeId("BODY", id)); err != nil {
+	if _, _, err := c.cmd(222, maybeID("BODY", id)); err != nil {
 		return nil, err
 	}
 	return c.body(), nil
@@ -763,7 +760,7 @@ func (c *Conn) readHeader(r *bufio.Reader) (res *Article, err error) {
 		// a single key joined with commas, so we keep all values seperate.
 		oldvalue, present := res.Header[key]
 		if present {
-			sv := make([]string, 0)
+			sv := []string{}
 			sv = append(sv, oldvalue...)
 			sv = append(sv, value)
 			res.Header[key] = sv
