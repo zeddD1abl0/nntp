@@ -155,6 +155,12 @@ Body.
 		t.Fatal("newgroups shouldn't error " + err.Error())
 	}
 
+	//SetCompression
+	err = conn.SetCompression()
+	if err != nil {
+		t.Fatal("SetCompression shouldn't error: " + err.Error())
+	}
+
 	// Overview
 	overviews, err := conn.Overview(10, 11)
 	if err != nil {
@@ -233,6 +239,7 @@ Fin.
 .
 231 New newsgroups follow
 .
+290 Feature enabled 
 224 Overview information for 10-11 follows
 10	Subject10	Author <author@server>	Sat, 18 Oct 2003 18:00:00 +0030	<d@e.f>		1000	9
 11	Subject11		18 Oct 2003 19:00:00 +0030	<e@f.g>	<d@e.f> <a@b.c>	2000	18	Extra stuff
@@ -256,6 +263,7 @@ HEAD 101
 BODY 1
 NEWNEWS gmane.comp.lang.go.general 20100301 000000 GMT
 NEWGROUPS 20100301 000000 GMT
+XFEATURE COMPRESS GZIP
 OVER 10-11
 QUIT
 `

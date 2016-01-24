@@ -5,6 +5,7 @@ package nntp
 import (
 	"bufio"
 	"bytes"
+	"compress/zlib"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -47,10 +48,11 @@ type ProtocolError string
 // an io.Reader), that io.Reader is only valid until the next call to a
 // method of Conn.
 type Conn struct {
-	conn  io.WriteCloser
-	r     *bufio.Reader
-	br    *bodyReader
-	close bool
+	conn     io.WriteCloser
+	r        *bufio.Reader
+	br       *bodyReader
+	close    bool
+	compress bool
 }
 
 // A Group gives information about a single news group on the server.
@@ -263,6 +265,15 @@ func (c *Conn) Authenticate(username, password string) error {
 	return err
 }
 
+// SetCompression turns on compression for this connection
+func (c *Conn) SetCompression() error {
+	_, _, err := c.cmd(290, "XFEATURE COMPRESS GZIP")
+	if err == nil {
+		c.compress = true
+	}
+	return err
+}
+
 // cmd executes an NNTP command:
 // It sends the command given by the format and arguments, and then
 // reads the response line. If expectCode > 0, the status code on the
@@ -367,17 +378,30 @@ type MessageOverview struct {
 // Overview returns overviews of all messages in the current group with message number between
 // begin and end, inclusive.
 func (c *Conn) Overview(begin, end int) ([]MessageOverview, error) {
-	if _, _, err := c.cmd(224, "OVER %d-%d", begin, end); err != nil {
-		return nil, err
-	}
-
-	lines, err := c.readStrings()
+	_, _, err := c.cmd(224, "XOVER %d-%d", begin, end)
 	if err != nil {
 		return nil, err
 	}
 
-	result := make([]MessageOverview, 0, len(lines))
-	for _, line := range lines {
+	var r io.Reader
+	if c.compress {
+		zr, err := zlib.NewReader(c.r)
+		if err != nil {
+			return nil, err
+		}
+		defer zr.Close()
+		r = zr
+	} else {
+		r = c.r
+	}
+
+	scanner := bufio.NewScanner(r)
+	var overviews = []MessageOverview{}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if "." == line {
+			return overviews, nil
+		}
 		overview := MessageOverview{}
 		ss := strings.SplitN(strings.TrimSpace(line), "\t", 9)
 		if len(ss) < 8 {
@@ -405,9 +429,12 @@ func (c *Conn) Overview(begin, end int) ([]MessageOverview, error) {
 			return nil, ProtocolError("bad line count '" + ss[7] + "'in line:" + line)
 		}
 		overview.Extra = append([]string{}, ss[8:]...)
-		result = append(result, overview)
+		overviews = append(overviews, overview)
 	}
-	return result, nil
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return overviews, nil
 }
 
 // parseGroups is used to parse a list of group states.
