@@ -131,8 +131,12 @@ Body.`
 	}
 
 	// Just headers?
-	if _, err = conn.Head(fmt.Sprintf("%d", grp.High)); err != nil {
+	hdr, err := conn.Head(fmt.Sprintf("%d", grp.High))
+	if err != nil {
 		t.Fatal("should be able to fetch the high article: " + err.Error())
+	}
+	if hdr.Header["Message-Id"][0] != "<c@d.e>" {
+		t.Fatalf("Unexpected message id in header: '%v' vs '<c@d.e>'", hdr.Header)
 	}
 
 	// Without an id?
@@ -172,6 +176,10 @@ Body.`
 	}
 	if len(grps) != 2 {
 		t.Fatal("newgroups expected to return 2 groups")
+	}
+	grpname := "alt.rfc-writers.recovery"
+	if grps[0].Name != grpname {
+		t.Fatalf("Unexpected group name: %s vs %s", grpname, grps[0].Name)
 	}
 
 	// Overview
