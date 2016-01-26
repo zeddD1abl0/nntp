@@ -7,22 +7,30 @@ package nntp
 import (
 	"bufio"
 	"bytes"
+	"compress/zlib"
 	"fmt"
 	"io"
-	"io/ioutil"
+	"net/textproto"
 	"strings"
 	"testing"
 	"time"
+
+	log "github.com/Sirupsen/logrus"
 )
 
+func init() {
+	log.SetLevel(log.DebugLevel)
+}
+
 func TestSanityChecks(t *testing.T) {
-	if _, err := Dial("", ""); err == nil {
+	if _, err := New("", ""); err == nil {
 		t.Fatal("Dial should require at least a destination address.")
 	}
 }
 
 type faker struct {
 	io.Writer
+	io.Reader
 }
 
 func (f faker) Close() error {
@@ -30,14 +38,15 @@ func (f faker) Close() error {
 }
 
 func TestBasics(t *testing.T) {
-	basicServer = strings.Join(strings.Split(basicServer, "\n"), "\r\n")
+	basicServer := makeBasicServer()
 	basicClient = strings.Join(strings.Split(basicClient, "\n"), "\r\n")
 
 	var cmdbuf bytes.Buffer
 	var fake faker
 	fake.Writer = &cmdbuf
+	fake.Reader = bufio.NewReader(bytes.NewReader(basicServer))
 
-	conn := &Conn{conn: fake, r: bufio.NewReader(strings.NewReader(basicServer))}
+	conn := &Conn{conn: textproto.NewConn(fake)}
 
 	// Test some global commands that don't take arguments
 	if _, err := conn.Capabilities(); err != nil {
@@ -64,10 +73,22 @@ func TestBasics(t *testing.T) {
 
 	tt := time.Date(2010, time.March, 01, 00, 0, 0, 0, time.UTC)
 
-	const grp = "gmane.comp.lang.go.general"
-	_, l, h, err := conn.Group(grp)
+	const groupName = "gmane.comp.lang.go.general"
+	grp, err := conn.Group(groupName)
 	if err != nil {
 		t.Fatal("Group shouldn't error: " + err.Error())
+	}
+	if grp.Count != 1000 {
+		t.Fatalf("Group's count not set correctly: %d vs %d", 1000, grp.Count)
+	}
+	if grp.Low != 500 {
+		t.Fatalf("Group's low article number not set correctly: %d vs %d", 500, grp.Low)
+	}
+	if grp.High != 1000 {
+		t.Fatalf("Group's high article number set correctly: %d vs %d", 1000, grp.High)
+	}
+	if grp.Name != groupName {
+		t.Fatalf("Group's name not set correctly: %s vs %s", groupName, grp.Name)
 	}
 
 	// test STAT, NEXT, and LAST
@@ -82,45 +103,35 @@ func TestBasics(t *testing.T) {
 	}
 
 	// Can we grab articles?
-	a, err := conn.Article(fmt.Sprintf("%d", l))
+	a, err := conn.Article(fmt.Sprintf("%d", grp.Low))
 	if err != nil {
 		t.Fatal("should be able to fetch the low article: " + err.Error())
-	}
-	body, err := ioutil.ReadAll(a.Body)
-	if err != nil {
-		t.Fatal("error reading reader: " + err.Error())
 	}
 
 	// Test that the article body doesn't get mangled.
 	expectedbody := `Blah, blah.
 .A single leading .
-Fin.
-`
-	if !bytes.Equal([]byte(expectedbody), body) {
+Fin.`
+	body := strings.Join(a.Body, "\n")
+	if expectedbody != body {
 		t.Fatalf("article body read incorrectly; got:\n%s\nExpected:\n%s", body, expectedbody)
 	}
 
 	// Test articleReader
 	expectedart := `Message-Id: <b@c.d>
 
-Body.
-`
-	a, err = conn.Article(fmt.Sprintf("%d", l+1))
+Body.`
+	a, err = conn.Article(fmt.Sprintf("%d", grp.Low+1))
 	if err != nil {
 		t.Fatal("shouldn't error reading article low+1: " + err.Error())
 	}
-	var abuf bytes.Buffer
-	_, err = a.WriteTo(&abuf)
-	if err != nil {
-		t.Fatal("shouldn't error writing out article: " + err.Error())
-	}
-	actualart := abuf.String()
+	actualart := a.String()
 	if actualart != expectedart {
 		t.Fatalf("articleReader broke; got:\n%s\nExpected\n%s", actualart, expectedart)
 	}
 
 	// Just headers?
-	if _, err = conn.Head(fmt.Sprintf("%d", h)); err != nil {
+	if _, err = conn.Head(fmt.Sprintf("%d", grp.High)); err != nil {
 		t.Fatal("should be able to fetch the high article: " + err.Error())
 	}
 
@@ -130,35 +141,37 @@ Body.
 	}
 
 	// How about bad articles? Do they error?
-	if _, err = conn.Head(fmt.Sprintf("%d", l-1)); err == nil {
+	if _, err = conn.Head(fmt.Sprintf("%d", grp.Low-1)); err == nil {
 		t.Fatal("shouldn't be able to fetch articles lower than low")
 	}
-	if _, err = conn.Head(fmt.Sprintf("%d", h+1)); err == nil {
+	if _, err = conn.Head(fmt.Sprintf("%d", grp.High+1)); err == nil {
 		t.Fatal("shouldn't be able to fetch articles higher than high")
 	}
 
 	// Just the body?
-	r, err := conn.Body(fmt.Sprintf("%d", l))
+	_, err = conn.Body(fmt.Sprintf("%d", grp.Low))
 	if err != nil {
 		t.Fatal("should be able to fetch the low article body" + err.Error())
 	}
-	if _, err = ioutil.ReadAll(r); err != nil {
-		t.Fatal("error reading reader: " + err.Error())
-	}
 
-	if _, err = conn.NewNews(grp, tt); err != nil {
+	if _, err = conn.NewNews(groupName, tt); err != nil {
 		t.Fatal("newnews should work: " + err.Error())
 	}
 
 	// NewGroups
-	if _, err = conn.NewGroups(tt); err != nil {
+	grps, err := conn.NewGroups(tt)
+	if err != nil {
 		t.Fatal("newgroups shouldn't error " + err.Error())
 	}
-
-	//SetCompression
-	err = conn.SetCompression()
+	if len(grps) != 0 {
+		t.Fatal("newgroups should return empty list when there are no new groups")
+	}
+	grps, err = conn.NewGroups(tt)
 	if err != nil {
-		t.Fatal("SetCompression shouldn't error: " + err.Error())
+		t.Fatal("newgroups shouldn't error " + err.Error())
+	}
+	if len(grps) != 2 {
+		t.Fatal("newgroups expected to return 2 groups")
 	}
 
 	// Overview
@@ -167,6 +180,32 @@ Body.
 		t.Fatal("overview shouldn't error: " + err.Error())
 	}
 	expectedOverviews := []MessageOverview{
+		MessageOverview{10, "Subject10", "Author <author@server>", time.Date(2003, 10, 18, 18, 0, 0, 0, time.FixedZone("", 1800)), "<d@e.f>", []string{}, 1000, 9, []string{}},
+		MessageOverview{11, "Subject11", "", time.Date(2003, 10, 18, 19, 0, 0, 0, time.FixedZone("", 1800)), "<e@f.g>", []string{"<d@e.f>", "<a@b.c>"}, 2000, 18, []string{"Extra stuff"}},
+	}
+
+	if len(overviews) != len(expectedOverviews) {
+		t.Fatalf("returned %d overviews, expected %d", len(overviews), len(expectedOverviews))
+	}
+
+	for i, o := range overviews {
+		if fmt.Sprint(o) != fmt.Sprint(expectedOverviews[i]) {
+			t.Fatalf("in place of %dth overview expected %v, got %v", i, expectedOverviews[i], o)
+		}
+	}
+
+	//SetCompression
+	err = conn.SetCompression()
+	if err != nil {
+		t.Fatal("SetCompression shouldn't error: " + err.Error())
+	}
+
+	// Overview with compression
+	overviews, err = conn.Overview(10, 11)
+	if err != nil {
+		t.Fatal("overview shouldn't error: " + err.Error())
+	}
+	expectedOverviews = []MessageOverview{
 		MessageOverview{10, "Subject10", "Author <author@server>", time.Date(2003, 10, 18, 18, 0, 0, 0, time.FixedZone("", 1800)), "<d@e.f>", []string{}, 1000, 9, []string{}},
 		MessageOverview{11, "Subject11", "", time.Date(2003, 10, 18, 19, 0, 0, 0, time.FixedZone("", 1800)), "<e@f.g>", []string{"<d@e.f>", "<a@b.c>"}, 2000, 18, []string{"Extra stuff"}},
 	}
@@ -191,7 +230,16 @@ Body.
 	}
 }
 
-var basicServer = `101 Capability list:
+func makeBasicServer() []byte {
+	var b bytes.Buffer
+	w := zlib.NewWriter(&b)
+
+	w.Write([]byte("10	Subject10	Author <author@server>	Sat, 18 Oct 2003 18:00:00 +0030	<d@e.f>		1000	9\r\n"))
+	w.Write([]byte("11	Subject11		18 Oct 2003 19:00:00 +0030	<e@f.g>	<d@e.f> <a@b.c>	2000	18	Extra stuff\r\n"))
+	w.Flush()
+	w.Close()
+
+	basicServer := strings.Join(strings.Split(`101 Capability list:
 VERSION 2
 .
 111 20100329034158
@@ -199,7 +247,7 @@ VERSION 2
 foo 7 3 y
 bar 000008 02 m
 .
-211 100 1 100 gmane.comp.lang.go.general
+211 1000 500 1000 gmane.comp.lang.go.general
 223 1 <a@b.c> status
 223 2 <b@c.d> Article retrieved
 223 1 <a@b.c> Article retrieved
@@ -239,13 +287,26 @@ Fin.
 .
 231 New newsgroups follow
 .
-290 Feature enabled 
-224 Overview information for 10-11 follows
+231 New newsgroups follow
+alt.rfc-writers.recovery 4 1 y
+tx.natives.recovery 89 56 y
+.
+224 Overview information for 10-11 follows1
 10	Subject10	Author <author@server>	Sat, 18 Oct 2003 18:00:00 +0030	<d@e.f>		1000	9
 11	Subject11		18 Oct 2003 19:00:00 +0030	<e@f.g>	<d@e.f> <a@b.c>	2000	18	Extra stuff
 .
-205 Bye!
-`
+290 Feature enabled
+224 xover information follows [COMPRESS=GZIP]
+`, "\n"), "\r\n")
+
+	fin := ".\r\n205 Bye!\r\n"
+
+	sbytes := []byte(basicServer)
+	sbytes = append(sbytes, b.Bytes()...)
+	sbytes = append(sbytes, []byte(fin)...)
+	return sbytes
+
+}
 
 var basicClient = `CAPABILITIES
 DATE
@@ -254,16 +315,18 @@ GROUP gmane.comp.lang.go.general
 STAT
 NEXT
 LAST
-ARTICLE 1
-ARTICLE 2
-HEAD 100
+ARTICLE 500
+ARTICLE 501
+HEAD 1000
 HEAD
-HEAD 0
-HEAD 101
-BODY 1
+HEAD 499
+HEAD 1001
+BODY 500
 NEWNEWS gmane.comp.lang.go.general 20100301 000000 GMT
 NEWGROUPS 20100301 000000 GMT
+NEWGROUPS 20100301 000000 GMT
+XOVER 10-11
 XFEATURE COMPRESS GZIP
-OVER 10-11
+XOVER 10-11
 QUIT
 `
