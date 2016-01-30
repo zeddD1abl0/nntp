@@ -1,14 +1,17 @@
 nntp.go
 =======
 
-An NNTP (news) Client package for go (golang). Forked from [nntp-go](http://code.google.com/p/nntp-go/) to bring it up to date.
+An NNTP (news) Client package for go (golang). Forked from [nntp](http://chrisfarms/nntp).
+- Changed to using net/textproto
+- Added support for compressed XOVER responses
+
 
 Example
 -------
 
 ```go
   // connect to news server
-  conn, err := nntp.Dial("tcp", "news.example.com:119")
+  conn, err := nntp.NewTLS("tcp", "news.example.com:563", nil)
   if err != nil {
     log.Fatalf("connection failed: %v", err)
   }
@@ -19,10 +22,10 @@ Example
   }
 
   // connect to a news group
-  grp := "alt.binaries.pictures"
-  _, l, _, err := conn.Group(grp)
+  grpName := "alt.binaries.pictures"
+  group, err := conn.Group(grpName)
   if err != nil {
-    log.Fatalf("Could not connect to group %s: %v %d", grp, err, l)
+    log.Fatalf("Could not connect to group %s: %v %d", grpName, err)
   }
 
   // fetch an article
@@ -33,8 +36,5 @@ Example
   }
 
   // read the article contents
-  body, err := ioutil.ReadAll(article.Body)
-  if err != nil {
-    log.Fatalf("error reading reader: %v", err)
-  }
+  body := strings.Join(article.Body,"")
 ```

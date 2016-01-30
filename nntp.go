@@ -25,16 +25,6 @@ const timeFormatNew = "20060102 150405"
 // timeFormatDate is the NNTP time format string for responses to the DATE command
 const timeFormatDate = "20060102150405"
 
-// An Error represents an error response from an NNTP server.
-type Error struct {
-	Code uint
-	Msg  string
-}
-
-func (e Error) Error() string {
-	return fmt.Sprintf("%03d %s", e.Code, e.Msg)
-}
-
 // A ProtocolError represents responses from an NNTP server
 // that seem incorrect for NNTP.
 type ProtocolError string
@@ -74,16 +64,7 @@ func New(network, addr string) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	_, msg, err := c.ReadCodeLine(200)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Conn{
-		conn:   c,
-		Banner: msg,
-	}, nil
+	return newClient(c)
 }
 
 // NewTLS connects with TLS
@@ -92,7 +73,10 @@ func NewTLS(net, addr string, cfg *tls.Config) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn := textproto.NewConn(c)
+	return newClient(textproto.NewConn(c))
+}
+
+func newClient(conn *textproto.Conn) (*Conn, error) {
 	_, msg, err := conn.ReadCodeLine(200)
 	if err != nil {
 		return nil, err
@@ -150,8 +134,9 @@ func (c *Conn) MultilineCommand(cmd string, expectCode int) (int, []string, erro
 type Group struct {
 	Name string
 	// High and low message-numbers
-	High  int64
-	Low   int64
+	High int64
+	Low  int64
+	// Estimated count of articles in the group
 	Count int64
 	// Status indicates if general posting is allowed --
 	// typical values are "y", "n", or "m".
