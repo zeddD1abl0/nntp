@@ -230,7 +230,7 @@ func (c *Conn) NewNews(group string, since time.Time) ([]string, error) {
 
 // MessageOverview of a message returned by OVER/XOVER command.
 type MessageOverview struct {
-	MessageNumber int       // Message number in the group
+	MessageNumber int64     // Message number in the group
 	Subject       string    // Subject header value. Empty if the header is missing.
 	From          string    // From header value. Empty is the header is missing.
 	Date          time.Time // Parsed Date header value. Zero if the header is missing or unparseable.
@@ -239,6 +239,17 @@ type MessageOverview struct {
 	Bytes         int       // Message size in bytes, called :bytes metadata item in RFC3977.
 	Lines         int       // Message size in lines, called :lines metadata item in RFC3977.
 	Extra         []string  // Any additional fields returned by the server.
+}
+
+// Xref returns the Xref header if set otherwise the empty string.
+func (m *MessageOverview) Xref() string {
+	for _, line := range m.Extra {
+		if strings.HasPrefix(line, "Xref") && strings.Contains(line, ":") {
+			xref := strings.SplitN(line, ":", 2)
+			return strings.TrimSpace(xref[1])
+		}
+	}
+	return ""
 }
 
 // Overview returns overviews of all messages in the current group with message number between
@@ -284,7 +295,7 @@ func (c *Conn) Overview(begin, end int64) ([]MessageOverview, error) {
 		if len(ss) < 8 {
 			return nil, ProtocolError("short header listing line: " + line + strconv.Itoa(len(ss)))
 		}
-		overview.MessageNumber, err = strconv.Atoi(ss[0])
+		overview.MessageNumber, err = strconv.ParseInt(ss[0], 10, 64)
 		if err != nil {
 			return nil, ProtocolError("bad message number '" + ss[0] + "' in line: " + line)
 		}
