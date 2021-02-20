@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
 
 // timeFormatNew is the NNTP time format string for NEWNEWS / NEWGROUPS
